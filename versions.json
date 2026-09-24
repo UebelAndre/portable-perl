@@ -1,0 +1,34 @@
+{
+  "$comment": [
+    "Single source of truth for what gets built and vendored.",
+    "Every version under `perl` is built on every platform by each release",
+    "(tag YYYYMMDD). `default` is the one version pull requests build.",
+    "To add a version, append to `perl` with the sha256 of the .tar.gz",
+    "from https://www.cpan.org/src/5.0/."
+  ],
+  "default": "5.44.0",
+  "perl": {
+    "5.44.0": {
+      "url": "https://www.cpan.org/src/5.0/perl-5.44.0.tar.gz",
+      "sha256": "3b855066b92491cb40e86affb1ca57d1a388aa43e51b91c7806a32c2f65f96c3"
+    }
+  },
+  "cpanm": {
+    "version": "1.7049",
+    "url": "https://cpan.metacpan.org/authors/id/M/MI/MIYAGAWA/App-cpanminus-1.7049.tar.gz",
+    "sha256": "b9ffb88e62a06aa91bd7d5a28ef6bdbb942608aea90e3969aa29b33640035214"
+  },
+  "platforms": [
+    "x86_64-linux-gnu",
+    "aarch64-linux-gnu",
+    "x86_64-linux-musl",
+    "aarch64-linux-musl",
+    "x86_64-linux-musl-static",
+    "aarch64-linux-musl-static",
+    "x86_64-macos",
+    "aarch64-macos",
+    "x86_64-windows-msvc",
+    "aarch64-windows-msvc",
+    "x86_64-windows-gnu"
+  ]
+}

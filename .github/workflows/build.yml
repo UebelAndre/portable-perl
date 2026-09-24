@@ -1,0 +1,215 @@
+name: build
+
+# Reusable workflow that builds and verifies every supported platform.
+# Called by ci.yml (on pull requests) and release.yml (on tags).
+
+on:
+  workflow_call:
+    inputs:
+      perl-version:
+        description: Perl version to build. Defaults to versions.json.
+        type: string
+        required: false
+        default: ""
+    outputs:
+      perl-version:
+        description: The Perl version that was actually built.
+        value: ${{ jobs.resolve.outputs.perl-version }}
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: resolve version
+    runs-on: ubuntu-24.04
+    outputs:
+      perl-version: ${{ steps.pick.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pick
+        shell: bash
+        run: |
+          version='${{ inputs.perl-version }}'
+          if [[ -z "${version}" ]]; then
+            version="$(python3 -c 'import json;print(json.load(open("versions.json"))["default"])')"
+          fi
+          python3 - "${version}" <<'PY'
+          import json, sys
+          versions = json.load(open("versions.json"))
+          if sys.argv[1] not in versions["perl"]:
+              sys.exit(f"perl {sys.argv[1]} is not listed in versions.json")
+          PY
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building Perl ${version}"
+
+  build:
+    name: ${{ matrix.platform }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    # Perl's own test suite runs on every build, so these are not quick jobs.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: x86_64-linux-gnu
+            runner: ubuntu-24.04
+            linux: true
+          - platform: aarch64-linux-gnu
+            runner: ubuntu-24.04-arm
+            linux: true
+          - platform: x86_64-linux-musl
+            runner: ubuntu-24.04
+            linux: true
+          - platform: aarch64-linux-musl
+            runner: ubuntu-24.04-arm
+            linux: true
+          - platform: x86_64-linux-musl-static
+            runner: ubuntu-24.04
+            linux: true
+          - platform: aarch64-linux-musl-static
+            runner: ubuntu-24.04-arm
+            linux: true
+          - platform: x86_64-macos
+            runner: macos-15-intel
+          - platform: aarch64-macos
+            runner: macos-15
+          - platform: x86_64-windows-msvc
+            runner: windows-2025
+          - platform: aarch64-windows-msvc
+            runner: windows-11-arm
+          - platform: x86_64-windows-gnu
+            runner: windows-2025
+            mingw: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # The -gnu flavour is upstream Perl built with mingw-w64 GCC from the
+      # image's own MSYS2 (release: false), in the UCRT64 environment: that is
+      # the compiler/CRT pairing current Strawberry Perl uses, so XS modules
+      # written against Strawberry meet the same ABI here. update: false keeps
+      # the run independent of what pacman's mirrors are doing today.
+      - name: Install the mingw-w64 UCRT toolchain
+        if: ${{ matrix.mingw }}
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
+
+      # Every Linux flavour builds inside a container, but the job itself runs
+      # on the host: see build/build-linux.sh for why there is no `container:`
+      # key here. Build and verify share one container invocation, because
+      # neither a musl-linked nor a glibc-2.17-linked interpreter is guaranteed
+      # to run on the Ubuntu host.
+      - name: Build and verify (linux)
+        if: ${{ matrix.linux }}
+        shell: bash
+        run: |
+          ./build/build-linux.sh \
+            --platform '${{ matrix.platform }}' \
+            --perl-version '${{ needs.resolve.outputs.perl-version }}' \
+            --run-tests --verify
+
+      - name: Build (macos)
+        if: ${{ endsWith(matrix.platform, '-macos') }}
+        shell: bash
+        run: |
+          ./build/build-unix.sh \
+            --platform '${{ matrix.platform }}' \
+            --perl-version '${{ needs.resolve.outputs.perl-version }}' \
+            --run-tests
+
+      - name: Build (windows)
+        if: ${{ contains(matrix.platform, '-windows-') }}
+        shell: pwsh
+        run: |
+          ./build/build-windows.ps1 `
+            -Platform '${{ matrix.platform }}' `
+            -PerlVersion '${{ needs.resolve.outputs.perl-version }}' `
+            -RunTests `
+            -SetupMsvc
+
+      - name: Verify (macos)
+        if: ${{ endsWith(matrix.platform, '-macos') }}
+        shell: bash
+        run: |
+          ./build/verify-unix.sh \
+            --archive "dist/perl-${{ needs.resolve.outputs.perl-version }}-${{ matrix.platform }}.tar.xz" \
+            --perl-version '${{ needs.resolve.outputs.perl-version }}'
+
+      - name: Verify (windows)
+        if: ${{ contains(matrix.platform, '-windows-') }}
+        shell: pwsh
+        run: |
+          ./build/verify-windows.ps1 `
+            -Archive "dist/perl-${{ needs.resolve.outputs.perl-version }}-${{ matrix.platform }}.tar.xz" `
+            -PerlVersion '${{ needs.resolve.outputs.perl-version }}'
+
+      # The version is part of the name: a release run builds several versions
+      # in one workflow run, and artifact names must be unique within a run.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perl-${{ needs.resolve.outputs.perl-version }}-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # Re-run the acceptance tests outside the environment that produced the
+  # artifact. This is what proves the claims on the tin:
+  #
+  #   gnu          built in manylinux2014, checked on current Ubuntu -> the
+  #                glibc 2.17 floor and the relocation hold off the build host,
+  #                and nothing from the build image leaked into the link.
+  #   musl         built on Alpine 3.20, checked on Alpine 3.21 -> no
+  #                dependency on the exact build image.
+  #   musl-static  built on Alpine, checked on Ubuntu with no musl installed at
+  #                all -> the binary really is self-contained.
+  crosscheck:
+    name: crosscheck ${{ matrix.platform }}
+    needs: [resolve, build]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: x86_64-linux-gnu
+            runner: ubuntu-24.04
+          - platform: aarch64-linux-gnu
+            runner: ubuntu-24.04-arm
+          - platform: x86_64-linux-musl
+            runner: ubuntu-24.04
+            image: alpine:3.21
+          - platform: aarch64-linux-musl
+            runner: ubuntu-24.04-arm
+            image: alpine:3.21
+          - platform: x86_64-linux-musl-static
+            runner: ubuntu-24.04
+          - platform: aarch64-linux-musl-static
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: perl-${{ needs.resolve.outputs.perl-version }}-${{ matrix.platform }}
+          path: dist
+
+      - name: Crosscheck on the host
+        if: ${{ !matrix.image }}
+        shell: bash
+        run: |
+          ./build/verify-unix.sh \
+            --archive "dist/perl-${{ needs.resolve.outputs.perl-version }}-${{ matrix.platform }}.tar.xz" \
+            --perl-version '${{ needs.resolve.outputs.perl-version }}'
+
+      - name: Crosscheck in ${{ matrix.image }}
+        if: ${{ matrix.image }}
+        shell: bash
+        run: |
+          ./build/build-linux.sh \
+            --platform '${{ matrix.platform }}' \
+            --perl-version '${{ needs.resolve.outputs.perl-version }}' \
+            --image '${{ matrix.image }}' \
+            --verify-only
