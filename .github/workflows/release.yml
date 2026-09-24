@@ -1,0 +1,160 @@
+name: release
+
+# A release is a snapshot of the build pipeline, not of one Perl version: one
+# tag builds every Perl version listed in versions.json on every platform and
+# publishes them together, with a single SHA256SUMS and a signed provenance
+# attestation for every archive.
+#
+# Tag format: YYYYMMDD, or YYYYMMDD.N for a further train on the same day.
+#
+# The reason for this shape is that what changes together is the pipeline. A
+# fix to the build scripts -- a missed build-host path, a wrapper that was not
+# self-contained, a new verification check -- applies to every version alike,
+# so it ships by cutting a new train, which rebuilds and re-verifies the whole
+# catalogue with the fixed scripts. No version is ever left behind on an older
+# build that is known to be wrong. Consumers pin (train, perl version) and take
+# the per-platform sha256 from that train's SHA256SUMS.
+#
+# Running the workflow manually builds and verifies the whole catalogue without
+# publishing. Pull requests build only the default version, so this is how the
+# other versions are exercised before a train is cut.
+
+on:
+  push:
+    tags:
+      - '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+      - '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9]+'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalogue:
+    name: read versions.json
+    runs-on: ubuntu-24.04
+    outputs:
+      versions: ${{ steps.read.outputs.versions }}
+      count: ${{ steps.read.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        shell: bash
+        run: |
+          python3 - <<'PY' | tee -a "$GITHUB_OUTPUT"
+          import json
+          v = json.load(open("versions.json"))
+          versions = sorted(v["perl"])
+          print("versions=" + json.dumps(versions))
+          print("count=%d" % (len(versions) * len(v["platforms"])))
+          PY
+
+  # One build.yml run per catalogued version; build.yml itself fans out over
+  # the platforms and verifies every archive it produces.
+  build:
+    name: perl ${{ matrix.perl-version }}
+    needs: catalogue
+    strategy:
+      fail-fast: false
+      matrix:
+        perl-version: ${{ fromJSON(needs.catalogue.outputs.versions) }}
+    uses: ./.github/workflows/build.yml
+    with:
+      perl-version: ${{ matrix.perl-version }}
+
+  publish:
+    name: publish
+    if: github.ref_type == 'tag'
+    needs: [catalogue, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # create the release
+      id-token: write      # mint the Sigstore signing certificate
+      attestations: write  # record the provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: perl-*
+          path: staging
+          merge-multiple: true
+
+      - name: Assemble the release directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          # Per-archive .sha256 files are an artefact of the build jobs; the
+          # release carries one aggregated SHA256SUMS instead.
+          mv staging/*.tar.xz release/
+
+          # Every version on every platform, or no release at all: a partial
+          # train would leave consumers unable to tell a missing platform from
+          # a dropped one.
+          expected='${{ needs.catalogue.outputs.count }}'
+          actual="$(find release -name '*.tar.xz' | wc -l)"
+          if [[ "${actual}" -ne "${expected}" ]]; then
+            echo "expected ${expected} archives, found ${actual}:" >&2
+            ls -1 release >&2
+            exit 1
+          fi
+
+          # Sorted and path-free, so `sha256sum -c SHA256SUMS` works from the
+          # directory the user downloaded into.
+          ( cd release && sha256sum -- *.tar.xz | sort -k2 > SHA256SUMS )
+          cat release/SHA256SUMS
+
+      # Binds each archive's digest to this workflow run, this commit, and this
+      # repository. Consumers can check it with:
+      #     gh attestation verify <file> --repo ${{ github.repository }}
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/*.tar.xz
+
+      # Deliberately the gh CLI rather than a third-party release action: this
+      # step holds `contents: write`, so it is worth keeping its dependencies
+      # to things already on the runner.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSIONS: ${{ join(fromJSON(needs.catalogue.outputs.versions), ' ') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "Portable, relocatable Perl -- build ${TAG}."
+            echo
+            echo "Perl versions in this release:"
+            echo
+            for v in ${VERSIONS}; do echo "- ${v}"; done
+            echo
+            cat <<'EOF'
+          Each archive unpacks to a self-contained tree that can be moved
+          anywhere; `@INC` and `%Config` resolve against the interpreter at
+          runtime. See the [README](https://github.com/${{ github.repository }}#artifacts)
+          for what the platform suffixes mean -- in particular, the
+          `musl-static` flavour cannot load externally built XS modules.
+
+          Every Perl version here was built and verified by the same revision of
+          the build scripts; a later build number means the scripts changed, not
+          Perl. Pin a build together with a Perl version.
+
+          Verify a download:
+
+          ```sh
+          sha256sum -c SHA256SUMS
+          gh attestation verify <file> --repo ${{ github.repository }}
+          ```
+          EOF
+          } > notes.md
+
+          gh release create "${TAG}" \
+            --target '${{ github.sha }}' \
+            --title "Portable Perl ${TAG}" \
+            --notes-file notes.md \
+            release/*.tar.xz release/SHA256SUMS

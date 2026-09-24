@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      perl-version:
+        description: Perl version to build (defaults to versions.json)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check shell scripts
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          # -x so the sourced build/common.sh is followed.
+          shellcheck -x build/*.sh
+
+      - name: Check PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem build/*.ps1 | ForEach-Object {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) {
+              Write-Host "FAIL - $($_.Name)"
+              $errors | ForEach-Object { Write-Host "   $_" }
+              $failed = $true
+            } else {
+              Write-Host "ok   - $($_.Name)"
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Check the smoke test compiles
+        run: perl -c test/smoke.pl
+
+      - name: Check versions.json
+        run: |
+          python3 - <<'PY'
+          import json
+          v = json.load(open("versions.json"))
+          assert v["default"] in v["perl"], "default is not listed under perl"
+          for name, spec in v["perl"].items():
+              assert len(spec["sha256"]) == 64, f"{name}: sha256 is not 64 hex chars"
+          assert len(set(v["platforms"])) == len(v["platforms"]), "duplicate platform"
+          print(f"{len(v['platforms'])} platforms, default perl {v['default']}")
+          PY
+
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      perl-version: ${{ inputs.perl-version || '' }}
