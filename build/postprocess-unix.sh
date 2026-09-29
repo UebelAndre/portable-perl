@@ -98,27 +98,40 @@ for f in "${config_files[@]}"; do
     perl_rewrite "${f}" "${PREFIX}"
 done
 
-# --- 4a. drop build-time-only -L flags --------------------------------------
+# --- 4a. drop build-time-only -I/-L flags -----------------------------------
 #
-# The glibc builds add a -L pointing at a scratch directory holding
-# libcrypt.a (see build-unix.sh). Configure records it in ldflags, lddlflags
-# and config_args, where it is both a build-host path and a source of
-# non-determinism, since the directory name changes on every build. It has no
-# meaning once the interpreter is linked, so remove it.
+# Two kinds of search path in %Config only make sense on the build machine:
+#
+#   * The glibc builds add a -L pointing at a scratch directory holding
+#     libcrypt.a (see build-unix.sh). Configure records it in ldflags,
+#     lddlflags and config_args, where it is both a build-host path and a
+#     source of non-determinism, since the directory name changes per build.
+#   * On Linux, Configure's locincpth/loclibpth probing finds the build
+#     image's /usr/local and records -I/usr/local/include in ccflags and
+#     -L/usr/local/lib in ldflags. Those flags are what MakeMaker -- and any
+#     build system honouring $Config{ccflags}, as it must for the XS ABI --
+#     hands to every XS compile, so leaving them in would let a user's XS
+#     build pick up whatever headers and libraries their host has under
+#     /usr/local. Nothing in the interpreter needs them once it is linked.
 
 if [[ -n "${SCRUB_DIR}" ]]; then
-    log "Scrubbing build-time -L flags"
-    "${PYTHON}" - "${archdir}/Config_heavy.pl" "${SCRUB_DIR}" <<'PY'
+    log "Scrubbing build-time -I/-L flags"
+    "${PYTHON}" - "${archdir}/Config_heavy.pl" "${SCRUB_DIR}" "${PLATFORM}" <<'PY'
 import os, re, stat, sys
 
-path, scrub = sys.argv[1], sys.argv[2].rstrip("/")
+path, scrub, platform = sys.argv[1], sys.argv[2].rstrip("/"), sys.argv[3]
 
 with open(path, encoding="utf-8", errors="surrogateescape") as fh:
     text = fh.read()
 
-# The -L flag and whatever directory hangs off it, plus one trailing space so
-# the surrounding flags do not end up glued together.
-new = re.sub(r"-L%s[^\s'\"]*\s?" % re.escape(scrub), "", text)
+# The flag and whatever directory hangs off it. The /usr/local patterns stop
+# at a word boundary so /usr/local/lib64 and the like are left alone.
+patterns = [r"-L%s[^\s'\"]*" % re.escape(scrub)]
+if "linux" in platform:
+    patterns += [r"-I/usr/local/include(?![\w/])", r"-L/usr/local/lib(?![\w/])"]
+
+# Plus one trailing space so the surrounding flags do not end up glued together.
+new = re.sub(r"(?:%s)\s?" % "|".join(patterns), "", text)
 if new == text:
     sys.exit(0)
 

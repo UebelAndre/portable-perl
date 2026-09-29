@@ -14,9 +14,12 @@ on:
 permissions:
   contents: read
 
+# A full run is eleven Perl builds with their test suites, so a new push to a
+# pull request cancels the run it supersedes. Pushes to main are left to
+# finish, so every commit on main keeps a complete result.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
