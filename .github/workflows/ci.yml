@@ -58,12 +58,20 @@ jobs:
       - name: Check versions.json
         run: |
           python3 - <<'PY'
-          import json
+          import json, re
           v = json.load(open("versions.json"))
           assert v["default"] in v["perl"], "default is not listed under perl"
-          for name, spec in v["perl"].items():
-              assert len(spec["sha256"]) == 64, f"{name}: sha256 is not 64 hex chars"
+          specs = dict(v["perl"], cpanm=v["cpanm"])
+          for name, spec in specs.items():
+              assert re.fullmatch(r"[0-9a-f]{64}", spec["sha256"]), \
+                  f"{name}: sha256 is not 64 lowercase hex chars"
+              assert spec["url"].startswith("https://"), f"{name}: url is not https"
           assert len(set(v["platforms"])) == len(v["platforms"]), "duplicate platform"
+          # catch drift between the release.yml and build.yml
+          matrix = open(".github/workflows/build.yml").read()
+          for p in v["platforms"]:
+              assert re.search(r"- platform: %s$" % re.escape(p), matrix, re.M), \
+                  f"{p} is listed in versions.json but missing from build.yml's matrix"
           print(f"{len(v['platforms'])} platforms, default perl {v['default']}")
           PY
 
