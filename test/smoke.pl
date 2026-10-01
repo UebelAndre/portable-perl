@@ -5,8 +5,8 @@
 #
 #     <dist>/bin/perl test/smoke.pl --version 5.44.0
 #
-# It is deliberately written against core modules only, and must pass on all
-# six supported platforms.
+# It is deliberately written against core modules only, and must pass on
+# every platform listed in versions.json.
 use strict;
 use warnings;
 

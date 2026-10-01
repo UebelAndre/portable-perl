@@ -1,0 +1,10 @@
+# The only third-party dependencies in this repository are the actions the
+# workflows call (checkout, upload/download-artifact, setup-msys2,
+# attest-build-provenance). Perl and cpanm are pinned in versions.json by
+# design and bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

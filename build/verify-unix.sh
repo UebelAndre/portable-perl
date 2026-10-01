@@ -179,13 +179,15 @@ esac
 
 log "Checking that binaries are stripped"
 if command -v readelf >/dev/null 2>&1; then
+    debug_hits=0
     while read -r obj; do
         if readelf -S "${obj}" 2>/dev/null | grep -q '\.debug_info'; then
             printf 'FAIL - carries debug info: %s\n' "${obj#"${root}"/}"
             failures=$((failures + 1))
+            debug_hits=$((debug_hits + 1))
         fi
-    done < <(find "${root}" -type f \( -name '*.so' -o -name 'perl' \))
-    printf 'ok   - no .debug_info sections found\n'
+    done < <(find "${root}" -type f \( -name '*.so' -o -name '*.bundle' -o -name 'perl' \))
+    (( debug_hits )) || printf 'ok   - no .debug_info sections found\n'
 elif command -v file >/dev/null 2>&1; then
     check "bin/perl is stripped" bash -c "file '${perl_bin}' | grep -q 'not stripped' && exit 1 || exit 0"
 fi
