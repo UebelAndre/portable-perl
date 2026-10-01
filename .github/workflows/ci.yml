@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
 
-# A full run is eleven Perl builds with their test suites, so a new push to a
+# A full run is all Perl builds with their test suites, so a new push to a
 # pull request cancels the run it supersedes. Pushes to main are left to
 # finish, so every commit on main keeps a complete result.
 concurrency:
