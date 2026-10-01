@@ -103,12 +103,20 @@ gh attestation verify perl-5.44.0-x86_64-linux-gnu.tar.xz \
 
 ## What is in the archive
 
+On Unix:
+
 ```
 perl-<version>-<platform>/
   bin/            perl, xsubpp, cpanm, and the usual core utilities
   lib/<version>/  core modules, with <archname>/CORE/ holding the XS headers
   lib/site_perl/  empty, for anything installed later
 ```
+
+The Windows tree is flatter, because the install runs with `INST_VER` and
+`INST_ARCH` empty: core modules sit directly in `lib\`, the XS headers and the
+import library for linking XS in `lib\CORE`, and later installs go to
+`site\lib`. `bin\` additionally carries `perl5<xx>.dll` and the vendored
+compiler runtime, plus a `.bat` wrapper per utility.
 
 Everything is built for release: `-O3` on Unix, `-O1 -GL` with MSVC (upstream's
 deliberate choice — `-O1` produces smaller code that measures faster than `-O2`
