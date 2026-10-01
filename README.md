@@ -27,6 +27,42 @@ build together with a Perl version:
 https://github.com/UebelAndre/portable-perl/releases/download/<build>/perl-<version>-<platform>.tar.xz
 ```
 
+## Support and SLAs
+
+**This project is Bazel-specific.** It exists to supply Perl toolchains to  [`rules_perl`](https://github.com/bazel-contrib/rules_perl)
+and is not meant to be a generically supported Perl distribution. Support is scoped to
+that use; requests that only matter outside Bazel may be declined.
+
+### What is covered
+
+Only Perl core is covered: the interpreter and the modules that ship with it.
+CPAN modules and anything built on top of the archives are out of scope.
+
+### Which releases are built
+
+* **Stable releases only. **
+    * New stable releases are made available within one month of
+        their upstream release.
+    * Development releases (the odd-numbered 5.x series and release candidates)
+        are not guaranteed to be made available.
+* **Patch releases** are made available on request, or when the maintainers judge 
+there is a significant security reason to ship one.
+
+### How long releases stay available
+
+Every version from 5.44, where this repository began, onward is maintained indefinitely.
+The exception is a version found to carry significant security risks or vulnerabilities;
+the maintainers may remove it, and the reason is recorded in the release notes.
+
+### Platforms
+
+Every platform listed in [`versions.json`](versions.json) is built on a best-effort basis. If a core Perl
+version has a problem on a specific platform, please open an issue.
+
+### Everything else
+
+All other correspondence and bug fixes follow Bazel community standards and requirements.
+
 ## Artifacts
 
 Each release contains, for every Perl version, one archive per row below,
